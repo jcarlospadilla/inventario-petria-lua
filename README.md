@@ -20,7 +20,7 @@ El módulo permite:
 
 ## Instalación rápida en Mudlet
 
-1. Descargar el módulo `.xml` desde `dist/PetriaEQSearch.xml` cuando esté disponible.
+1. Descargar el módulo `.xml` desde `dist/PetriaEQSearch.xml`.
 2. Abrir Mudlet.
 3. Ir a **Module Manager** con `Alt+I`.
 4. Instalar el XML como módulo.
@@ -61,9 +61,18 @@ Si `Instancia_Activa` o `Extra_Data` no tienen información real, no se muestran
 - `emblema` se ignora en búsquedas automáticas de `eqfaltante`.
 - La data de `Vestir` puede venir mezclada en inglés y español, por eso se manejan alias como `Shield`, `Rodela`, `Escudo`, `Finger`, `Dedo`, etc.
 
+## Estructura del repositorio
+
+```text
+src/petria_eqsearch_mudlet.lua      Fuente Lua del módulo
+dist/PetriaEQSearch.xml             Módulo instalable en Mudlet
+tools/build_module.py               Genera dist/PetriaEQSearch.xml desde src/
+docs/USAGE.md                       Guía de uso
+CHANGELOG.md                        Historial de cambios
+```
+
 ## Próximos pasos
 
-- Mantener el módulo XML en `dist/`.
-- Mantener el Lua fuente en `src/`.
-- Agregar script de build para regenerar el XML desde el Lua.
 - Crear releases con `.xml` y `.mpackage`.
+- Agregar GitHub Action para generar el XML automáticamente desde `src/`.
+- Mantener `dist/PetriaEQSearch.xml` sincronizado con el Lua fuente.
