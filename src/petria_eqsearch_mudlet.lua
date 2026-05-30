@@ -1,5 +1,5 @@
 -- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev12-module
+-- Version: 2026.05.30-rev13-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -34,6 +34,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
+eqInv.version = "2026.05.30-rev13-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -611,6 +612,31 @@ end
 -- ------------------------------------------------------------
 -- Transformacion de items
 -- ------------------------------------------------------------
+function eqInv.dbItemRow(row)
+  -- Mudlet db:add solo acepta columnas definidas en el schema.
+  -- Los campos internos con prefijo _ son solo cache/memoria y no deben insertarse.
+  return {
+    vnum = row.vnum,
+    nombre = row.nombre,
+    desc_corta = row.desc_corta,
+    tipo = row.tipo,
+    extra_flags = row.extra_flags,
+    peso = row.peso,
+    valor = row.valor,
+    nivel = row.nivel,
+    material = row.material,
+    area = row.area,
+    vestir_text = row.vestir_text,
+    spells_text = row.spells_text,
+    afectaciones_text = row.afectaciones_text,
+    instancias_text = row.instancias_text,
+    set_name = row.set_name,
+    extra_data = row.extra_data,
+    raw_json = row.raw_json,
+    search_text = row.search_text
+  }
+end
+
 function eqInv.itemToRow(item)
   local vestirText = eqInv.join(item.Vestir or {}, ", ")
   local spellsText = eqInv.formatSpells(item.Spells)
@@ -891,7 +917,7 @@ function eqInv.importChunk()
     local item = st.items[idx]
     if type(item) == "table" then
       local row = eqInv.itemToRow(item)
-      local ok, err = db:add(eqInv.db.items, row)
+      local ok, err = db:add(eqInv.db.items, eqInv.dbItemRow(row))
       if ok == nil then
         eqInv.warn("No se pudo insertar VNUM " .. tostring(row.vnum) .. ": " .. tostring(err))
       else
