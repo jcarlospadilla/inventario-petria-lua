@@ -1,5 +1,5 @@
 -- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev21-module
+-- Version: 2026.05.30-rev22-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -38,7 +38,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev21-module"
+eqInv.version = "2026.05.30-rev22-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -103,8 +103,12 @@ eqInv.config = eqInv.config or {
   outputMode = "groupedTable",
   useColor = true,
 
-  -- Modo de recomendacion: subir, pk, defensa, caster, danio, balance.
+  -- Modo de recomendacion: subir, pk, defensa, caster, healer, danio, balance.
   recommendMode = "subir",
+
+  -- Orden visual normal: nivel | pts | nombre.
+  -- eqfaltante usa siempre pts aunque aqui diga nivel.
+  displaySortMode = "nivel",
 
   -- No usamos Vestir como columna: Vestir se muestra como encabezado de grupo.
   tableColumns = {
@@ -1467,6 +1471,58 @@ function eqInv.sortByRecommendation(results, mode)
   end)
 end
 
+function eqInv.sortByLevel(results)
+  table.sort(results, function(a, b)
+    if (a.nivel or 0) == (b.nivel or 0) then
+      if (a.nombre or "") == (b.nombre or "") then return (a.vnum or 0) < (b.vnum or 0) end
+      return (a.nombre or "") < (b.nombre or "")
+    end
+    return (a.nivel or 0) > (b.nivel or 0)
+  end)
+end
+
+function eqInv.sortByName(results)
+  table.sort(results, function(a, b)
+    if eqInv.norm(a.nombre or "") == eqInv.norm(b.nombre or "") then
+      if (a.nivel or 0) == (b.nivel or 0) then return (a.vnum or 0) < (b.vnum or 0) end
+      return (a.nivel or 0) > (b.nivel or 0)
+    end
+    return eqInv.norm(a.nombre or "") < eqInv.norm(b.nombre or "")
+  end)
+end
+
+function eqInv.sortDisplayResults(results)
+  local mode = eqInv.norm(eqInv.config.displaySortMode or "nivel")
+  if mode == "pts" or mode == "puntos" or mode == "score" then
+    eqInv.sortByRecommendation(results, eqInv.config.recommendMode)
+  elseif mode == "nombre" or mode == "name" then
+    eqInv.sortByName(results)
+  else
+    eqInv.sortByLevel(results)
+  end
+end
+
+function eqInv.setDisplaySortMode(mode)
+  mode = eqInv.norm(mode or "")
+  if mode == "" then
+    eqInv.echo("Orden actual: " .. tostring(eqInv.config.displaySortMode or "nivel"))
+    echo("Cambiar orden: eqorden nivel | pts | nombre\n")
+    return
+  end
+
+  if mode == "level" then mode = "nivel" end
+  if mode == "puntos" or mode == "score" then mode = "pts" end
+  if mode == "name" then mode = "nombre" end
+
+  if mode ~= "nivel" and mode ~= "pts" and mode ~= "nombre" then
+    eqInv.warn("Uso: eqorden nivel | pts | nombre")
+    return
+  end
+
+  eqInv.config.displaySortMode = mode
+  eqInv.echo("Orden visual: " .. mode)
+end
+
 function eqInv.recommendLabel()
   local mode = eqInv.norm(eqInv.config.recommendMode or "subir")
   if mode == "pk" then return "PK" end
@@ -1479,7 +1535,7 @@ function eqInv.recommendLabel()
 end
 
 function eqInv.printModeHint()
-  cecho("<grey>Modo:<reset> <white>" .. eqInv.recommendLabel() .. "<reset> <grey>| cambiar:<reset> eqmodo subir|pk|defensa|caster|healer|danio|balance\n")
+  cecho("<grey>Modo:<reset> <white>" .. eqInv.recommendLabel() .. "<reset> <grey>| Orden:<reset> <white>" .. tostring(eqInv.config.displaySortMode or "nivel") .. "<reset> <grey>| cambiar:<reset> eqmodo ... | eqorden nivel|pts|nombre\n")
 end
 
 function eqInv.setRecommendMode(mode)
@@ -1581,7 +1637,7 @@ function eqInv.groupResultsByWear(results)
   end)
 
   for _, g in ipairs(groups) do
-    eqInv.sortByRecommendation(g.items, eqInv.config.recommendMode)
+    eqInv.sortDisplayResults(g.items)
   end
 
   return groups
@@ -1816,10 +1872,7 @@ function eqInv.searchText(q)
   for _, item in ipairs(eqInv.cache.items) do
     if eqInv.containsText((item.nombre or "") .. " " .. (item.desc_corta or ""), q) then table.insert(results, item) end
   end
-  table.sort(results, function(a, b)
-    if (a.nivel or 0) == (b.nivel or 0) then return (a.nombre or "") < (b.nombre or "") end
-    return (a.nivel or 0) > (b.nivel or 0)
-  end)
+  eqInv.sortDisplayResults(results)
   eqInv.printResults(results, "Busca nombre/descripcion: " .. q)
 end
 
@@ -1891,6 +1944,7 @@ end
 function eqInv.searchWear(filter)
   if not eqInv.ensureReady() then return end
   local results = eqInv.findItems({ wear = filter })
+  eqInv.sortDisplayResults(results)
   eqInv.printResults(results, "Slot/tipo: " .. filter)
 end
 
@@ -1902,6 +1956,7 @@ end
 function eqInv.searchRange(minLevel, maxLevel, filter)
   if not eqInv.ensureReady() then return end
   local results = eqInv.findItems({ minLevel = minLevel, maxLevel = maxLevel, wear = filter })
+  eqInv.sortDisplayResults(results)
   local title
   if tonumber(minLevel) == tonumber(maxLevel) then
     title = "Nivel " .. tostring(maxLevel)
@@ -1995,6 +2050,7 @@ function eqInv.help()
   echo("eqpower [nivel]                 Muestra cap de SP/HSP y tope bruto por objeto.\n")
   echo("eqmodo                          Muestra modo actual y modos disponibles.\n")
   echo("eqmodo subir|pk|defensa|caster  Atajo para cambiar modo de recomendacion.\n")
+  echo("eqorden nivel|pts|nombre        Cambia orden visual de eqbusca/eqlista.\n")
   echo("eqfaltante                      Usa nivel GMCP, ignora emblema y muestra 3 sugerencias por slot.\n")
   echo("eqfaltantes                     Igual que eqfaltante.\n")
   echo("eqfaltante 14                   Override manual: busca sugerencias <= nivel 14.\n")
@@ -2145,6 +2201,7 @@ function eqInv.alias(input)
     else eqInv.setRecommendMode(rest) end
     return
   end
+  if cmd == "orden" or cmd == "sort" then eqInv.setDisplaySortMode(rest); return end
   if cmd == "power" or cmd == "spellpower" or cmd == "healpower" then eqInv.showPowerInfo(rest); return end
   if cmd == "faltante" or cmd == "faltantes" or cmd == "missing" then eqInv.captureMissing(rest); return end
   if cmd == "set" then
@@ -2194,6 +2251,7 @@ function eqInv.installAliases()
   eqInv.aliasIds.format = tempAlias([[^eqformat\s+(grouped|group|grupo|agrupado|table|tabla|paragraph|paragraphs|parrafo)\s*$]], function() eqInv.setOutputMode(matches[2]) end)
   eqInv.aliasIds.mode = tempAlias([[^eqmodo\s+(subir|level|levelear|xp|exp|pk|pvp|defensa|tanque|tank|caster|mago|hechicero|spell|spells|sp|healer|heal|curar|sanar|hsp|danio|dano|daño|damage|balance|balanced)\s*$]], function() eqInv.setRecommendMode(matches[2]) end)
   eqInv.aliasIds.modeHelp = tempAlias([[^eqmodo\s*$]], function() eqInv.showModeHelp() end)
+  eqInv.aliasIds.orden = tempAlias([[^eqorden(?:\s+(nivel|level|pts|puntos|score|nombre|name))?\s*$]], function() eqInv.setDisplaySortMode(matches[2] or "") end)
   eqInv.aliasIds.power = tempAlias([[^eqpower(?:\s+(\d+))?$]], function() eqInv.showPowerInfo(matches[2] or "") end)
   eqInv.aliasIds.vnum = tempAlias([[^eqvnum\s+(\d+)\s*$]], function() eqInv.searchVnum(matches[2]) end)
 end
