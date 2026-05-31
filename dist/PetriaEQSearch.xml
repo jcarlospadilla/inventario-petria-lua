@@ -15,7 +15,7 @@
         <name>PetriaEQSearch Core</name>
         <packageName>PetriaEQSearch</packageName>
         <script>-- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev15-module
+-- Version: 2026.05.30-rev17-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -52,7 +52,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev15-module"
+eqInv.version = "2026.05.30-rev17-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -105,6 +105,10 @@ eqInv.config = eqInv.config or {
   -- En busquedas amplias agrupadas, muestra pocos items por grupo para que no se quede solo en el primer grupo.
   groupedItemLimit = 3,
   groupLimit = 25,
+
+  -- Ancho maximo de salida. Mantener por debajo del ancho visual del MUD para evitar wrap feo.
+  boxWidth = 84,
+
   missingSlotLimit = 3,
   importChunkSize = 120,
   dbName = "petriaeqinv",
@@ -1460,7 +1464,7 @@ function eqInv.recommendLabel()
 end
 
 function eqInv.printModeHint()
-  cecho("&lt;grey&gt;Modo activo:&lt;reset&gt; &lt;white&gt;" .. eqInv.recommendLabel() .. "&lt;reset&gt; &lt;grey&gt;| cambiar:&lt;reset&gt; eqmodo subir | pk | defensa | caster | healer | danio | balance\n")
+  cecho("&lt;grey&gt;Modo:&lt;reset&gt; &lt;white&gt;" .. eqInv.recommendLabel() .. "&lt;reset&gt; &lt;grey&gt;| cambiar:&lt;reset&gt; eqmodo subir|pk|defensa|caster|healer|danio|balance\n")
 end
 
 function eqInv.setRecommendMode(mode)
@@ -1576,29 +1580,105 @@ function eqInv.cleanCellText(s)
   return eqInv.trim(s)
 end
 
-function eqInv.formatItemCompactLines(item)
+function eqInv.boxWidth()
+  return tonumber(eqInv.config.boxWidth) or 84
+end
+
+function eqInv.boxContentWidth()
+  -- Borde izquierdo: "| " ocupa 2 caracteres.
+  -- No usamos borde derecho para evitar descuadre visual por Unicode, colores o wrap de Mudlet.
+  return eqInv.boxWidth() - 2
+end
+
+function eqInv.boxLine(ch)
+  ch = ch or "-"
+  return "+" .. string.rep(ch, eqInv.boxWidth() - 1)
+end
+
+function eqInv.boxTextLine(text)
+  text = eqInv.cleanCellText(text)
+  return "| " .. text
+end
+
+function eqInv.wrapText(text, width)
+  text = eqInv.cleanCellText(text)
+  width = tonumber(width) or 80
+  local lines = {}
+
+  if text == "" then return { "" } end
+
+  while #text &gt; width do
+    local cut = width
+    local sub = text:sub(1, width)
+    local lastSpace = sub:match("^.*()%s+")
+    if lastSpace and lastSpace &gt; 20 then
+      cut = lastSpace - 1
+    end
+    table.insert(lines, eqInv.trim(text:sub(1, cut)))
+    text = eqInv.trim(text:sub(cut + 1))
+  end
+
+  if text ~= "" then table.insert(lines, text) end
+  return lines
+end
+
+function eqInv.printBoxWrapped(label, text)
+  local prefix = label .. ": "
+  local width = eqInv.boxContentWidth() - #prefix
+  if width &lt; 24 then width = eqInv.boxContentWidth() end
+
+  local lines = eqInv.wrapText(text, width)
+  if #lines == 0 then lines = { "" } end
+
+  eqInv.out(eqInv.boxTextLine(prefix .. lines[1]), "grey")
+
+  if #lines &gt; 1 then
+    local pad = string.rep(" ", #prefix)
+    for i = 2, #lines do
+      eqInv.out(eqInv.boxTextLine(pad .. lines[i]), "grey")
+    end
+  end
+end
+
+function eqInv.itemHeaderParts(item)
   local nivel = tostring(item.nivel or 0)
   local peso = tostring(item.peso or 0)
   local pts = tostring(eqInv.scoreItem(item, eqInv.config.recommendMode))
   local tipo = eqInv.cleanCellText(item.tipo or "")
+
+  return "Nivel " .. nivel .. " | Peso " .. peso .. " | Pts " .. pts .. " | Tipo " .. tipo
+end
+
+function eqInv.printPrettyItemBox(item)
   local nombre = eqInv.cleanCellText(item.nombre or "?")
   local afecta = eqInv.cleanCellText(item.afectaciones_text or "")
   local lugar = eqInv.cleanCellText(eqInv.formatLugar(item))
 
   if afecta == "" then afecta = "-" end
+  if lugar == "" then lugar = "-" end
 
-  local line1 = "[" .. nivel .. " | peso " .. peso .. " | pts " .. pts .. " | " .. tipo .. "] " .. nombre
-  local line2 = "  afecta: " .. afecta
-  local line3 = "  lugar : " .. lugar
+  eqInv.out(eqInv.boxLine("-"), "grey")
+  eqInv.out(eqInv.boxTextLine(eqInv.itemHeaderParts(item)), eqInv.colorByLevel(item.nivel))
+  eqInv.printBoxWrapped("Nombre", nombre)
+  eqInv.printBoxWrapped("Afecta", afecta)
+  eqInv.printBoxWrapped("Lugar ", lugar)
+  eqInv.out(eqInv.boxLine("-"), "grey")
+end
 
-  return eqInv.shorten(line1, 108), eqInv.shorten(line2, 108), eqInv.shorten(line3, 108)
+-- Compatibilidad: el modo agrupado usa cajas; estas funciones quedan por si se reutilizan.
+function eqInv.formatItemCompactLines(item)
+  local header = eqInv.itemHeaderParts(item)
+  local nombre = "Nombre: " .. eqInv.cleanCellText(item.nombre or "?")
+  local afecta = "Afecta: " .. eqInv.cleanCellText(item.afectaciones_text or "-")
+  local lugar = "Lugar : " .. eqInv.cleanCellText(eqInv.formatLugar(item))
+
+  return eqInv.shorten(header, eqInv.boxContentWidth()),
+         eqInv.shorten(nombre, eqInv.boxContentWidth()),
+         eqInv.shorten(afecta .. " | " .. lugar, eqInv.boxContentWidth())
 end
 
 function eqInv.printCompactItem(item)
-  local l1, l2, l3 = eqInv.formatItemCompactLines(item)
-  eqInv.out(l1, eqInv.colorByLevel(item.nivel))
-  echo(l2 .. "\n")
-  echo(l3 .. "\n")
+  eqInv.printPrettyItemBox(item)
 end
 
 function eqInv.formatItemTableRow(item)
@@ -1650,16 +1730,18 @@ function eqInv.printGroupedTable(results, limit)
     if broadSearch and groupCount &gt;= (eqInv.config.groupLimit or 25) then break end
     groupCount = groupCount + 1
 
-    cecho("\n&lt;white&gt;== " .. group.label .. " ==&lt;reset&gt; &lt;grey&gt;(" .. tostring(#group.items) .. ")&lt;reset&gt;\n")
+    cecho("\n&lt;white&gt;" .. eqInv.boxLine("=") .. "&lt;reset&gt;\n")
+    cecho("&lt;white&gt;" .. eqInv.boxTextLine("Grupo: " .. group.label .. "  (" .. tostring(#group.items) .. ")") .. "&lt;reset&gt;\n")
+    cecho("&lt;white&gt;" .. eqInv.boxLine("=") .. "&lt;reset&gt;\n")
 
     local maxItems = math.min(perGroupLimit, #group.items)
     for i = 1, maxItems do
       printed = printed + 1
-      eqInv.printCompactItem(group.items[i])
+      eqInv.printPrettyItemBox(group.items[i])
     end
 
     if #group.items &gt; maxItems then
-      eqInv.warn("Grupo " .. group.label .. ": mostrando " .. tostring(maxItems) .. " de " .. tostring(#group.items) .. ". Filtra por slot para ver mas: eqsearch 14 " .. group.label)
+      eqInv.warn("Grupo " .. group.label .. ": " .. tostring(maxItems) .. "/" .. tostring(#group.items) .. ". Filtra mas, por ejemplo: eqsearch 10-14 " .. group.label)
     end
   end
 
@@ -1808,7 +1890,7 @@ function eqInv.help()
   echo("eqsearch tipos                  Lista tipos indexados.\n")
   echo("eqsearch vestir                 Lista valores Vestir indexados y alias de slots.\n")
   echo("eqsearch flags                  Lista flags indexados.\n")
-  echo("eqsearch formato grouped        Agrupa por Vestir/slot, sin columna Vestir.\n")
+  echo("eqsearch formato grouped        Agrupa por Vestir/slot en bloques compactos.\n")
   echo("eqsearch formato table          Tabla plana, sin columna Vestir.\n")
   echo("eqsearch formato paragraph      Parrafo minimalista.\n")
   echo("eqsearch modo subir             Recomienda para subir nivel: CON/SAB/INT/HP/Mana.\n")
