@@ -1,5 +1,5 @@
 -- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev22-module
+-- Version: 2026.05.30-rev23-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -38,7 +38,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev22-module"
+eqInv.version = "2026.05.30-rev23-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -103,6 +103,12 @@ eqInv.config = eqInv.config or {
   outputMode = "groupedTable",
   useColor = true,
 
+  -- Colores base de salida. Se usan tonos menos brillantes para no saturar el buffer.
+  baseTextColor = "grey",
+  borderColor = "dim_grey",
+  headerColor = "dark_slate_grey",
+  renderMudColors = true,
+
   -- Modo de recomendacion: subir, pk, defensa, caster, healer, danio, balance.
   recommendMode = "subir",
 
@@ -155,12 +161,64 @@ function eqInv.err(msg)
   cecho("<red>[EQSearch]<reset> " .. tostring(msg) .. "\n")
 end
 
+function eqInv.mudColorMap()
+  return {
+    b = "blue",
+    B = "dodger_blue",
+    c = "cyan",
+    C = "deep_sky_blue",
+    g = "green",
+    G = "lime_green",
+    m = "purple",
+    M = "magenta",
+    o = "orange",
+    O = "dark_orange",
+    r = "red",
+    R = "firebrick",
+    y = "saddle_brown",
+    Y = "yellow",
+    w = "grey",
+    W = "white",
+    D = "dim_grey",
+    H = "bold",
+    i = "italic",
+    u = "underline"
+  }
+end
+
+function eqInv.stripMudColors(text)
+  text = tostring(text or "")
+  return (text:gsub("{[bBcCgGmMoOrRyYwWDHixu]", ""))
+end
+
+function eqInv.renderMudColors(text, baseColor)
+  text = tostring(text or "")
+  if not eqInv.config.renderMudColors then return eqInv.stripMudColors(text) end
+
+  local map = eqInv.mudColorMap()
+  local base = baseColor or eqInv.config.baseTextColor or "grey"
+
+  -- Evita que texto del JSON rompa cecho con tags accidentales.
+  text = text:gsub("<", "&lt;"):gsub(">", "&gt;")
+
+  text = text:gsub("{(.)", function(code)
+    if code == "x" then return "<reset><" .. base .. ">" end
+    local mudletColor = map[code]
+    if mudletColor then return "<" .. mudletColor .. ">" end
+    return "{" .. code
+  end)
+
+  return text
+end
+
 function eqInv.out(text, color)
   text = tostring(text or "")
+  color = color or eqInv.config.baseTextColor or "grey"
+
   if eqInv.config.useColor and color and color ~= "" then
-    cecho("<" .. color .. ">" .. text .. "<reset>\n")
+    cecho("<" .. color .. ">" .. eqInv.renderMudColors(text, color) .. "<reset>\n")
   else
-    echo(text .. "\n")
+    echo(eqInv.stripMudColors(text) .. "\n")
   end
 end
 
@@ -190,7 +248,7 @@ function eqInv.safeString(v)
 end
 
 function eqInv.norm(s)
-  s = eqInv.safeString(s):lower()
+  s = eqInv.stripMudColors(eqInv.safeString(s)):lower()
   local repl = {
     ["á"]="a", ["à"]="a", ["ä"]="a", ["â"]="a",
     ["é"]="e", ["è"]="e", ["ë"]="e", ["ê"]="e",
@@ -1701,12 +1759,12 @@ function eqInv.printBoxWrapped(label, text)
   local lines = eqInv.wrapText(text, width)
   if #lines == 0 then lines = { "" } end
 
-  eqInv.out(eqInv.boxTextLine(prefix .. lines[1]), "grey")
+  eqInv.out(eqInv.boxTextLine(prefix .. lines[1]), eqInv.config.baseTextColor)
 
   if #lines > 1 then
     local pad = string.rep(" ", #prefix)
     for i = 2, #lines do
-      eqInv.out(eqInv.boxTextLine(pad .. lines[i]), "grey")
+      eqInv.out(eqInv.boxTextLine(pad .. lines[i]), eqInv.config.baseTextColor)
     end
   end
 end
@@ -1804,19 +1862,20 @@ function eqInv.printGroupedTable(results, limit)
     if broadSearch and groupCount >= (eqInv.config.groupLimit or 25) then break end
     groupCount = groupCount + 1
 
-    cecho("\n<white>" .. eqInv.boxLine("=") .. "<reset>\n")
-    cecho("<white>" .. eqInv.boxTextLine("Grupo: " .. group.label .. "  (" .. tostring(#group.items) .. ")") .. "<reset>\n")
-    cecho("<white>" .. eqInv.boxLine("=") .. "<reset>\n")
+    echo("\n")
+    eqInv.out(eqInv.boxLine("="), eqInv.config.borderColor)
+    eqInv.out(eqInv.boxTextLine("Grupo: " .. group.label .. "  (" .. tostring(#group.items) .. ")"), eqInv.config.headerColor)
+    eqInv.out(eqInv.boxLine("="), eqInv.config.borderColor)
 
     local maxItems = math.min(perGroupLimit, #group.items)
     if maxItems > 0 then
-      eqInv.out(eqInv.boxLine("-"), "grey")
+      eqInv.out(eqInv.boxLine("-"), eqInv.config.borderColor)
     end
 
     for i = 1, maxItems do
       printed = printed + 1
       eqInv.printPrettyItemBox(group.items[i])
-      eqInv.out(eqInv.boxLine("-"), "grey")
+      eqInv.out(eqInv.boxLine("-"), eqInv.config.borderColor)
     end
 
     if #group.items > maxItems then
@@ -2051,6 +2110,7 @@ function eqInv.help()
   echo("eqmodo                          Muestra modo actual y modos disponibles.\n")
   echo("eqmodo subir|pk|defensa|caster  Atajo para cambiar modo de recomendacion.\n")
   echo("eqorden nivel|pts|nombre        Cambia orden visual de eqbusca/eqlista.\n")
+  echo("Los codigos de color de Petria como {R, {G, {Y y {x se renderizan en la salida.\n")
   echo("eqfaltante                      Usa nivel GMCP, ignora emblema y muestra 3 sugerencias por slot.\n")
   echo("eqfaltantes                     Igual que eqfaltante.\n")
   echo("eqfaltante 14                   Override manual: busca sugerencias <= nivel 14.\n")
