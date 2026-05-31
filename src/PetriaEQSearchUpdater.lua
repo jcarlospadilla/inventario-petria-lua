@@ -1,12 +1,13 @@
 -- PetriaEQSearch Updater para Mudlet
--- Version: 2026.05.30-updater1
+-- Version: 2026.05.30-updater3
 --
--- Instalar este script como modulo pequeño o pegarlo dentro del perfil.
 -- Comandos:
 --   eqversion
 --   eqcheckupdate
 --   equpdate
 --   equpdate force
+--   eqautoupdate
+--   eqautoupdate off|check|on
 
 _petriaEqUpdater = _petriaEqUpdater or {}
 eqUpdater = _petriaEqUpdater
@@ -19,6 +20,10 @@ function eqUpdater.safeKillEventHandler(id)
   if id then pcall(killAnonymousEventHandler, id) end
 end
 
+function eqUpdater.safeKillTimer(id)
+  if id then pcall(killTimer, id) end
+end
+
 function eqUpdater.cleanupRuntime()
   if eqUpdater.aliasIds then
     for _, id in pairs(eqUpdater.aliasIds) do eqUpdater.safeKillAlias(id) end
@@ -29,23 +34,33 @@ function eqUpdater.cleanupRuntime()
     for _, id in pairs(eqUpdater.handlers) do eqUpdater.safeKillEventHandler(id) end
   end
   eqUpdater.handlers = {}
+
+  if eqUpdater.timers then
+    for _, id in pairs(eqUpdater.timers) do eqUpdater.safeKillTimer(id) end
+  end
+  eqUpdater.timers = {}
 end
 
 eqUpdater.cleanupRuntime()
 
 eqUpdater.config = eqUpdater.config or {
-  localVersion = "2026.05.30-rev12-module",
+  updaterVersion = "2026.05.30-updater3",
+  localVersion = "2026.05.30-rev22-module",
   versionUrl = "https://raw.githubusercontent.com/jcarlospadilla/inventario-petria-lua/main/VERSION",
   moduleUrl = "https://raw.githubusercontent.com/jcarlospadilla/inventario-petria-lua/main/dist/PetriaEQSearch.xml",
   moduleName = "PetriaEQSearch",
   versionPath = getMudletHomeDir() .. "/PetriaEQSearch_REMOTE_VERSION.txt",
-  modulePath = getMudletHomeDir() .. "/PetriaEQSearch_update.xml"
+  modulePath = getMudletHomeDir() .. "/PetriaEQSearch.xml",
+  autoUpdatePath = getMudletHomeDir() .. "/PetriaEQSearch_AUTOUPDATE.txt",
+  autoUpdateMode = "check" -- off | check | on
 }
 
 eqUpdater.state = eqUpdater.state or {
   action = nil,
   force = false,
-  remoteVersion = nil
+  remoteVersion = nil,
+  versionEventHandled = false,
+  moduleEventHandled = false
 }
 
 function eqUpdater.trim(s)
@@ -65,31 +80,6 @@ function eqUpdater.err(msg)
   cecho("<red>[EQUpdate]<reset> " .. tostring(msg) .. "\n")
 end
 
-function eqUpdater.getLocalVersion()
-  -- Si el modulo principal existe y expone version, usala.
-  if type(eqInv) == "table" and eqInv.version then
-    return tostring(eqInv.version)
-  end
-  return tostring(eqUpdater.config.localVersion)
-end
-
-function eqUpdater.showVersion()
-  eqUpdater.echo("Version local: " .. eqUpdater.getLocalVersion())
-  eqUpdater.echo("Version URL: " .. eqUpdater.config.versionUrl)
-end
-
-function eqUpdater.checkUpdate(force)
-  eqUpdater.state.action = force and "update-version" or "check-version"
-  eqUpdater.state.force = force == true
-  eqUpdater.state.remoteVersion = nil
-  eqUpdater.echo("Consultando VERSION en GitHub...")
-  downloadFile(eqUpdater.config.versionPath, eqUpdater.config.versionUrl)
-end
-
-function eqUpdater.update(force)
-  eqUpdater.checkUpdate(force == true)
-end
-
 function eqUpdater.readFile(path)
   local f, err = io.open(path, "r")
   if not f then return nil, err end
@@ -98,10 +88,90 @@ function eqUpdater.readFile(path)
   return content
 end
 
+function eqUpdater.writeFile(path, content)
+  local f, err = io.open(path, "w")
+  if not f then return nil, err end
+  f:write(tostring(content or ""))
+  f:close()
+  return true
+end
+
+function eqUpdater.getLocalVersion()
+  if type(eqInv) == "table" and eqInv.version then
+    return tostring(eqInv.version)
+  end
+  return tostring(eqUpdater.config.localVersion)
+end
+
+function eqUpdater.showVersion()
+  eqUpdater.echo("Updater: " .. tostring(eqUpdater.config.updaterVersion or "?"))
+  eqUpdater.echo("Version local: " .. eqUpdater.getLocalVersion())
+  eqUpdater.echo("Version URL: " .. eqUpdater.config.versionUrl)
+  eqUpdater.echo("Auto-update: " .. tostring(eqUpdater.config.autoUpdateMode or "check"))
+end
+
+function eqUpdater.loadAutoUpdateMode()
+  local content = eqUpdater.readFile(eqUpdater.config.autoUpdatePath)
+  local mode = eqUpdater.trim(content or "")
+  if mode ~= "off" and mode ~= "check" and mode ~= "on" then
+    mode = eqUpdater.config.autoUpdateMode or "check"
+  end
+  eqUpdater.config.autoUpdateMode = mode
+  return mode
+end
+
+function eqUpdater.saveAutoUpdateMode(mode)
+  mode = eqUpdater.trim(mode or "")
+  if mode ~= "off" and mode ~= "check" and mode ~= "on" then
+    eqUpdater.warn("Uso: eqautoupdate off | check | on")
+    return
+  end
+  eqUpdater.config.autoUpdateMode = mode
+  eqUpdater.writeFile(eqUpdater.config.autoUpdatePath, mode)
+  eqUpdater.echo("Auto-update definido: " .. mode)
+  if mode == "off" then
+    eqUpdater.echo("No revisara actualizaciones al iniciar.")
+  elseif mode == "check" then
+    eqUpdater.echo("Al iniciar solo avisara si hay actualizacion.")
+  elseif mode == "on" then
+    eqUpdater.echo("Al iniciar descargara e instalara automaticamente si hay actualizacion.")
+  end
+end
+
+function eqUpdater.showAutoUpdate()
+  eqUpdater.echo("Auto-update actual: " .. tostring(eqUpdater.config.autoUpdateMode or "check"))
+  echo("Uso: eqautoupdate off | check | on\n")
+end
+
+function eqUpdater.checkUpdate()
+  eqUpdater.state.action = "check-version"
+  eqUpdater.state.force = false
+  eqUpdater.state.remoteVersion = nil
+  eqUpdater.state.versionEventHandled = false
+  eqUpdater.state.moduleEventHandled = false
+  eqUpdater.echo("Consultando VERSION en GitHub...")
+  downloadFile(eqUpdater.config.versionPath, eqUpdater.config.versionUrl)
+end
+
+function eqUpdater.update(force)
+  eqUpdater.state.action = "update-version"
+  eqUpdater.state.force = force == true
+  eqUpdater.state.remoteVersion = nil
+  eqUpdater.state.versionEventHandled = false
+  eqUpdater.state.moduleEventHandled = false
+  eqUpdater.echo("Consultando VERSION en GitHub...")
+  downloadFile(eqUpdater.config.versionPath, eqUpdater.config.versionUrl)
+end
+
 function eqUpdater.onVersionDownloaded()
+  if eqUpdater.state.versionEventHandled then return end
+  if eqUpdater.state.action ~= "check-version" and eqUpdater.state.action ~= "update-version" then return end
+  eqUpdater.state.versionEventHandled = true
+
   local content, err = eqUpdater.readFile(eqUpdater.config.versionPath)
   if not content then
     eqUpdater.err("No pude leer VERSION descargado: " .. tostring(err))
+    eqUpdater.state.action = nil
     return
   end
 
@@ -114,6 +184,7 @@ function eqUpdater.onVersionDownloaded()
 
   if remote == "" then
     eqUpdater.err("VERSION remoto esta vacio.")
+    eqUpdater.state.action = nil
     return
   end
 
@@ -123,23 +194,32 @@ function eqUpdater.onVersionDownloaded()
     else
       eqUpdater.echo("Ya tienes la version mas reciente.")
     end
+    eqUpdater.state.action = nil
     return
   end
 
   if remote == localVersion and not eqUpdater.state.force then
     eqUpdater.echo("Ya tienes la version mas reciente. Usa 'equpdate force' para reinstalar.")
+    eqUpdater.state.action = nil
     return
   end
 
   eqUpdater.echo("Descargando modulo actualizado...")
   eqUpdater.state.action = "download-module"
+  eqUpdater.state.moduleEventHandled = false
   downloadFile(eqUpdater.config.modulePath, eqUpdater.config.moduleUrl)
 end
 
 function eqUpdater.onModuleDownloaded()
+  if eqUpdater.state.moduleEventHandled then return end
+  if eqUpdater.state.action ~= "download-module" then return end
+  eqUpdater.state.moduleEventHandled = true
+  eqUpdater.state.action = "installing-module"
+
   local content, err = eqUpdater.readFile(eqUpdater.config.modulePath)
   if not content or eqUpdater.trim(content) == "" then
     eqUpdater.err("Modulo descargado vacio o ilegible: " .. tostring(err))
+    eqUpdater.state.action = nil
     return
   end
 
@@ -149,10 +229,12 @@ function eqUpdater.onModuleDownloaded()
   local ok, installErr = pcall(installModule, eqUpdater.config.modulePath)
   if not ok then
     eqUpdater.err("installModule fallo: " .. tostring(installErr))
+    eqUpdater.state.action = nil
     return
   end
 
   eqUpdater.config.localVersion = eqUpdater.state.remoteVersion or eqUpdater.config.localVersion
+  eqUpdater.state.action = nil
   eqUpdater.echo("Actualizacion instalada. Si no ves cambios, recarga el perfil o Module Manager.")
 end
 
@@ -167,6 +249,7 @@ end
 function eqUpdater.onDownloadError(_, ...)
   local args = {...}
   eqUpdater.err("Error de descarga: " .. table.concat(args, " | "))
+  eqUpdater.state.action = nil
 end
 
 function eqUpdater.registerHandlers()
@@ -180,18 +263,41 @@ function eqUpdater.installAliases()
   end)
 
   eqUpdater.aliasIds.check = tempAlias([[^eqcheckupdate$]], function()
-    eqUpdater.checkUpdate(false)
+    eqUpdater.checkUpdate()
   end)
 
   eqUpdater.aliasIds.update = tempAlias([[^equpdate(?:\s+(force))?$]], function()
     eqUpdater.update((matches[2] or "") == "force")
+  end)
+
+  eqUpdater.aliasIds.auto = tempAlias([[^eqautoupdate(?:\s+(off|check|on))?\s*$]], function()
+    local mode = matches[2] or ""
+    if mode == "" then eqUpdater.showAutoUpdate()
+    else eqUpdater.saveAutoUpdateMode(mode) end
+  end)
+end
+
+function eqUpdater.runStartupAutoUpdate()
+  local mode = eqUpdater.loadAutoUpdateMode()
+  if mode == "off" then return end
+
+  eqUpdater.timers.startupAutoUpdate = tempTimer(4, function()
+    if mode == "check" then
+      eqUpdater.echo("Auto-check de actualizaciones...")
+      eqUpdater.checkUpdate()
+    elseif mode == "on" then
+      eqUpdater.echo("Auto-update activo: revisando e instalando si hay nueva version...")
+      eqUpdater.update(false)
+    end
   end)
 end
 
 function eqUpdater.init()
   eqUpdater.registerHandlers()
   eqUpdater.installAliases()
-  eqUpdater.echo("Updater listo. Usa: eqversion | eqcheckupdate | equpdate")
+  eqUpdater.loadAutoUpdateMode()
+  eqUpdater.echo("Updater listo. Usa: eqversion | eqcheckupdate | equpdate | eqautoupdate")
+  eqUpdater.runStartupAutoUpdate()
 end
 
 eqUpdater.init()
