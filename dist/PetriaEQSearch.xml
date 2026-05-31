@@ -15,7 +15,7 @@
         <name>PetriaEQSearch Core</name>
         <packageName>PetriaEQSearch</packageName>
         <script>-- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev18-module
+-- Version: 2026.05.30-rev21-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -30,6 +30,8 @@
 --   eqsearch varita
 --   eqsearch 14
 --   eqsearch 14 luz
+--   eqsearch luz 14
+--   eqsearch luz
 --   eqsearch 10-14
 --   eqsearch 10-14 escudo
 --   eqsearch set dragon
@@ -52,7 +54,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev18-module"
+eqInv.version = "2026.05.30-rev21-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -977,7 +979,7 @@ function eqInv.importChunk()
 
   eqInv.importState = nil
   eqInv.echo("Progreso: 100% completado. Items cargados: " .. tostring(st.inserted))
-  eqInv.echo("Usa: eqsearch help")
+  eqInv.echo("Usa: eqlista help  |  eqbusca &lt;texto&gt;")
 end
 
 -- ------------------------------------------------------------
@@ -1687,12 +1689,14 @@ function eqInv.printPrettyItemBox(item)
   if afecta == "" then afecta = "-" end
   if lugar == "" then lugar = "-" end
 
-  eqInv.out(eqInv.boxLine("-"), "grey")
+  -- No imprime borde superior/inferior aquí.
+  -- El grupo controla los separadores para evitar líneas dobles:
+  -- +----------------
+  -- +----------------
   eqInv.out(eqInv.boxTextLine(eqInv.itemHeaderParts(item)), eqInv.colorByLevel(item.nivel))
   eqInv.printBoxWrapped("Nombre", nombre)
   eqInv.printBoxWrapped("Afecta", afecta)
   eqInv.printBoxWrapped("Lugar ", lugar)
-  eqInv.out(eqInv.boxLine("-"), "grey")
 end
 
 -- Compatibilidad: el modo agrupado usa cajas; estas funciones quedan por si se reutilizan.
@@ -1765,13 +1769,18 @@ function eqInv.printGroupedTable(results, limit)
     cecho("&lt;white&gt;" .. eqInv.boxLine("=") .. "&lt;reset&gt;\n")
 
     local maxItems = math.min(perGroupLimit, #group.items)
+    if maxItems &gt; 0 then
+      eqInv.out(eqInv.boxLine("-"), "grey")
+    end
+
     for i = 1, maxItems do
       printed = printed + 1
       eqInv.printPrettyItemBox(group.items[i])
+      eqInv.out(eqInv.boxLine("-"), "grey")
     end
 
     if #group.items &gt; maxItems then
-      eqInv.warn("Grupo " .. group.label .. ": " .. tostring(maxItems) .. "/" .. tostring(#group.items) .. ". Filtra mas, por ejemplo: eqsearch 10-14 " .. group.label)
+      eqInv.warn("Grupo " .. group.label .. ": " .. tostring(maxItems) .. "/" .. tostring(#group.items) .. ". Filtra mas, por ejemplo: eqlista 10-14 " .. group.label)
     end
   end
 
@@ -1812,6 +1821,13 @@ end
 
 function eqInv.searchText(q)
   if not eqInv.ensureReady() then return end
+  q = eqInv.trim(q or "")
+  if q == "" then
+    eqInv.warn("Uso: eqbusca &lt;nombre o descripcion&gt;  |  eqsearch &lt;nombre o descripcion&gt;")
+    eqInv.warn("Para filtros por nivel/slot/set usa: eqlista")
+    return
+  end
+
   local results = {}
   for _, item in ipairs(eqInv.cache.items) do
     if eqInv.containsText((item.nombre or "") .. " " .. (item.desc_corta or ""), q) then table.insert(results, item) end
@@ -1820,7 +1836,11 @@ function eqInv.searchText(q)
     if (a.nivel or 0) == (b.nivel or 0) then return (a.nombre or "") &lt; (b.nombre or "") end
     return (a.nivel or 0) &gt; (b.nivel or 0)
   end)
-  eqInv.printResults(results, "Busqueda: " .. q)
+  eqInv.printResults(results, "Busca nombre/descripcion: " .. q)
+end
+
+function eqInv.textAlias(input)
+  eqInv.searchText(input or "")
 end
 
 function eqInv.parseSearchLevelArg(input)
@@ -1844,6 +1864,55 @@ function eqInv.parseSearchLevelArg(input)
   end
 
   return nil, nil, input
+end
+
+function eqInv.parseNaturalSearch(input)
+  -- Soporta:
+  --   eqsearch 14              =&gt; nivel exacto 14
+  --   eqsearch 14 luz          =&gt; nivel exacto 14 + filtro luz
+  --   eqsearch 10-14 escudo    =&gt; rango 10-14 + filtro escudo
+  --   eqsearch luz 14          =&gt; filtro luz + nivel exacto 14
+  --   eqsearch luz 6-14        =&gt; filtro luz + rango 6-14
+  --   eqsearch luz             =&gt; filtro/slot luz, todos los niveles
+  --   eqsearch light           =&gt; filtro/slot light, todos los niveles
+  input = eqInv.trim(input or "")
+  if input == "" then return nil end
+
+  local minLevel, maxLevel, filter = eqInv.parseSearchLevelArg(input)
+  if minLevel ~= nil and maxLevel ~= nil then
+    return { kind = "level", minLevel = minLevel, maxLevel = maxLevel, filter = filter }
+  end
+
+  local left, a, b = input:match("^(.-)%s+(%d+)%s*%-%s*(%d+)%s*$")
+  if left and a and b then
+    a, b = tonumber(a), tonumber(b)
+    if a &gt; b then a, b = b, a end
+    return { kind = "level", minLevel = a, maxLevel = b, filter = eqInv.trim(left) }
+  end
+
+  local left2, n = input:match("^(.-)%s+(%d+)%s*$")
+  if left2 and n then
+    n = tonumber(n)
+    return { kind = "level", minLevel = n, maxLevel = n, filter = eqInv.trim(left2) }
+  end
+
+  -- Si el texto completo es un alias de slot, buscar por slot/tipo, no por nombre.
+  if eqInv.getSlotAlias(input) then
+    return { kind = "wear", minLevel = nil, maxLevel = nil, filter = input }
+  end
+
+  return { kind = "text", query = input }
+end
+
+function eqInv.searchWear(filter)
+  if not eqInv.ensureReady() then return end
+  local results = eqInv.findItems({ wear = filter })
+  eqInv.printResults(results, "Slot/tipo: " .. filter)
+end
+
+function eqInv.showModeHelp()
+  eqInv.echo("Modo actual: " .. eqInv.recommendLabel())
+  echo("Cambiar modo: eqmodo subir | pk | defensa | caster | healer | danio | balance\n")
 end
 
 function eqInv.searchRange(minLevel, maxLevel, filter)
@@ -1910,30 +1979,39 @@ end
 function eqInv.help()
   cecho("&lt;cyan&gt;EQSearch Petria - ayuda&lt;reset&gt;\n")
   echo("eqsync [url]                    Descarga, borra DB anterior e indexa el JSON.\n")
-  echo("eqsearch varita                 Busca por nombre o descripcion.\n")
-  echo("eqsearch 14                     Items exactamente de nivel 14.\n")
-  echo("eqsearch 10-14                  Items nivel 10 al 14, agrupados por Vestir; muestra pocos por grupo.\n")
-  echo("eqsearch 14 luz                 Items exactamente nivel 14 compatibles con luz.\n")
-  echo("eqsearch 10-14 escudo           Items nivel 10 al 14 que se visten como escudo/rodela/escudo.\n")
-  echo("eqsearch set                    Lista todos los sets indexados.\n")
-  echo("eqsearch set dragon             Busca items cuyo Set contenga 'dragon'.\n")
+  echo("\n")
+  echo("BUSQUEDA LITERAL POR NOMBRE/DESCRIPCION:\n")
+  echo("eqbusca varita                  Busca 'varita' en nombre o descripcion.\n")
+  echo("eqsearch varita                 Alias de eqbusca.\n")
+  echo("eqbusca luz 14                  Busca literalmente 'luz' y '14' en nombre/descripcion.\n")
+  echo("\n")
+  echo("LISTADO ESTRUCTURADO POR NIVEL/SLOT/SET:\n")
+  echo("eqlista 14                      Items exactamente de nivel 14.\n")
+  echo("eqlista 10-14                   Items nivel 10 al 14, agrupados por Vestir.\n")
+  echo("eqlista 14 luz                  Items exactamente nivel 14 compatibles con luz.\n")
+  echo("eqlista luz 14                  Igual que eqlista 14 luz.\n")
+  echo("eqlista luz                     Todos los items compatibles con luz.\n")
+  echo("eqlista 10-14 escudo            Items nivel 10 al 14 que se visten como escudo/rodela/escudo.\n")
+  echo("eqlista set                     Lista todos los sets indexados.\n")
+  echo("eqlista set dragon              Busca items cuyo Set contenga 'dragon'.\n")
+  echo("eqlista tipos                   Lista tipos indexados.\n")
+  echo("eqlista vestir                  Lista valores Vestir indexados y alias de slots.\n")
+  echo("eqlista flags                   Lista flags indexados.\n")
+  echo("eqlista formato grouped         Agrupa por Vestir/slot en bloques compactos.\n")
+  echo("eqlista formato table           Tabla plana, sin columna Vestir.\n")
+  echo("eqlista formato paragraph       Parrafo minimalista.\n")
+  echo("eqlista modo subir              Recomienda para subir nivel: CON/SAB/INT/HP/Mana.\n")
+  echo("eqlista modo pk                 Recomienda para PK: Damroll/Hitroll/DEX/HP/Saves.\n")
+  echo("eqlista modo defensa            Recomienda defensa: HP/CON/protecciones/saves/resistencias.\n")
+  echo("eqlista modo caster             Recomienda caster: INT/Mana/SpellPower/saves.\n")
+  echo("eqlista modo healer             Recomienda healer: SAB/Mana/HealPower/saves.\n")
+  echo("\n")
+  echo("OTROS:\n")
   echo("eqvnum 1100                     Muestra un item especifico por VNUM.\n")
-  echo("eqsearch tipos                  Lista tipos indexados.\n")
-  echo("eqsearch vestir                 Lista valores Vestir indexados y alias de slots.\n")
-  echo("eqsearch flags                  Lista flags indexados.\n")
-  echo("eqsearch formato grouped        Agrupa por Vestir/slot en bloques compactos.\n")
-  echo("eqsearch formato table          Tabla plana, sin columna Vestir.\n")
-  echo("eqsearch formato paragraph      Parrafo minimalista.\n")
-  echo("eqsearch modo subir             Recomienda para subir nivel: CON/SAB/INT/HP/Mana.\n")
-  echo("eqsearch modo pk                Recomienda para PK: Damroll/Hitroll/DEX/HP/Saves.\n")
-  echo("eqsearch modo defensa           Recomienda defensa: HP/CON/protecciones/saves/resistencias.\n")
-  echo("eqsearch modo caster            Recomienda caster: INT/Mana/SpellPower/saves.\n")
-  echo("eqsearch modo healer            Recomienda healer: SAB/Mana/HealPower/saves.\n")
   echo("eqpower [nivel]                 Muestra cap de SP/HSP y tope bruto por objeto.\n")
+  echo("eqmodo                          Muestra modo actual y modos disponibles.\n")
   echo("eqmodo subir|pk|defensa|caster  Atajo para cambiar modo de recomendacion.\n")
-  echo("eqsearch faltante               Usa nivel GMCP, ignora emblema y muestra 3 sugerencias por slot.\n")
-  echo("eqsearch faltantes              Igual que eqsearch faltante.\n")
-  echo("eqfaltante                      Atajo: usa nivel GMCP y muestra 3 sugerencias por slot.\n")
+  echo("eqfaltante                      Usa nivel GMCP, ignora emblema y muestra 3 sugerencias por slot.\n")
   echo("eqfaltantes                     Igual que eqfaltante.\n")
   echo("eqfaltante 14                   Override manual: busca sugerencias &lt;= nivel 14.\n")
   echo("eqlevel 14                      Nivel por defecto si GMCP no trae nivel.\n")
@@ -2078,7 +2156,11 @@ function eqInv.alias(input)
   if cmd == "vestir" or cmd == "slots" then eqInv.showVestir(); return end
   if cmd == "flags" then eqInv.showFlags(); return end
   if cmd == "formato" or cmd == "format" then eqInv.setOutputMode(rest); return end
-  if cmd == "modo" or cmd == "mode" or cmd == "recomendar" then eqInv.setRecommendMode(rest); return end
+  if cmd == "modo" or cmd == "mode" or cmd == "recomendar" then
+    if rest == "" then eqInv.showModeHelp()
+    else eqInv.setRecommendMode(rest) end
+    return
+  end
   if cmd == "power" or cmd == "spellpower" or cmd == "healpower" then eqInv.showPowerInfo(rest); return end
   if cmd == "faltante" or cmd == "faltantes" or cmd == "missing" then eqInv.captureMissing(rest); return end
   if cmd == "set" then
@@ -2087,8 +2169,17 @@ function eqInv.alias(input)
     return
   end
 
-  local minLevel, maxLevel, filter = eqInv.parseSearchLevelArg(input)
-  if minLevel ~= nil and maxLevel ~= nil then eqInv.searchRange(minLevel, maxLevel, filter); return end
+  local parsed = eqInv.parseNaturalSearch(input)
+  if parsed and parsed.kind == "level" then
+    eqInv.searchRange(parsed.minLevel, parsed.maxLevel, parsed.filter)
+    return
+  elseif parsed and parsed.kind == "wear" then
+    eqInv.searchWear(parsed.filter)
+    return
+  elseif parsed and parsed.kind == "text" then
+    eqInv.searchText(parsed.query)
+    return
+  end
 
   eqInv.searchText(input)
 end
@@ -2105,13 +2196,20 @@ function eqInv.installAliases()
   for _, id in pairs(eqInv.aliasIds or {}) do eqInv.safeKillAlias(id) end
   eqInv.aliasIds = {}
 
-  eqInv.aliasIds.search = tempAlias([[^eqsearch(?:\s+(.*))?$]], function() eqInv.alias(matches[2] or "") end)
+  -- eqsearch/eqbusca: busqueda literal por nombre/descripcion.
+  eqInv.aliasIds.searchText = tempAlias([[^eqsearch(?:\s+(.*))?$]], function() eqInv.textAlias(matches[2] or "") end)
+  eqInv.aliasIds.busca = tempAlias([[^eqbusca(?:\s+(.*))?$]], function() eqInv.textAlias(matches[2] or "") end)
+
+  -- eqlista: listado estructurado por nivel, slot, set, tipos, flags, etc.
+  eqInv.aliasIds.lista = tempAlias([[^eqlista(?:\s+(.*))?$]], function() eqInv.alias(matches[2] or "") end)
+
   eqInv.aliasIds.sync = tempAlias([[^eqsync(?:\s+(.+))?$]], function() eqInv.sync(matches[2] or "") end)
   eqInv.aliasIds.faltantes = tempAlias([[^eqfaltantes(?:\s+(.*))?$]], function() eqInv.captureMissing(matches[2] or "") end)
   eqInv.aliasIds.faltante = tempAlias([[^eqfaltante(?:\s+(.*))?$]], function() eqInv.captureMissing(matches[2] or "") end)
   eqInv.aliasIds.level = tempAlias([[^eqlevel\s+(\d+)\s*$]], function() eqInv.setDefaultLevel(matches[2]) end)
   eqInv.aliasIds.format = tempAlias([[^eqformat\s+(grouped|group|grupo|agrupado|table|tabla|paragraph|paragraphs|parrafo)\s*$]], function() eqInv.setOutputMode(matches[2]) end)
   eqInv.aliasIds.mode = tempAlias([[^eqmodo\s+(subir|level|levelear|xp|exp|pk|pvp|defensa|tanque|tank|caster|mago|hechicero|spell|spells|sp|healer|heal|curar|sanar|hsp|danio|dano|daño|damage|balance|balanced)\s*$]], function() eqInv.setRecommendMode(matches[2]) end)
+  eqInv.aliasIds.modeHelp = tempAlias([[^eqmodo\s*$]], function() eqInv.showModeHelp() end)
   eqInv.aliasIds.power = tempAlias([[^eqpower(?:\s+(\d+))?$]], function() eqInv.showPowerInfo(matches[2] or "") end)
   eqInv.aliasIds.vnum = tempAlias([[^eqvnum\s+(\d+)\s*$]], function() eqInv.searchVnum(matches[2]) end)
 end
@@ -2121,7 +2219,7 @@ function eqInv.init()
   eqInv.registerDownloadHandlers()
   eqInv.installAliases()
   eqInv.loadCacheFromDB()
-  eqInv.echo("Modulo listo. Usa: eqsync  |  eqsearch help")
+  eqInv.echo("Modulo listo. Usa: eqsync  |  eqlista help  |  eqbusca &lt;texto&gt;")
 end
 
 eqInv.init()
