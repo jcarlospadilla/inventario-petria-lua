@@ -1,5 +1,5 @@
 -- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev13-module
+-- Version: 2026.05.30-rev15-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -12,6 +12,8 @@
 --   eqsync [url]
 --   eqsearch help
 --   eqsearch varita
+--   eqsearch 14
+--   eqsearch 14 luz
 --   eqsearch 10-14
 --   eqsearch 10-14 escudo
 --   eqsearch set dragon
@@ -34,7 +36,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev13-module"
+eqInv.version = "2026.05.30-rev15-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -84,6 +86,9 @@ eqInv.config = eqInv.config or {
   defaultUrl = "https://www.petriamud.com/inv/inventarionew.json?t=1780176129349",
   defaultLevel = nil,
   resultLimit = 25,
+  -- En busquedas amplias agrupadas, muestra pocos items por grupo para que no se quede solo en el primer grupo.
+  groupedItemLimit = 3,
+  groupLimit = 25,
   missingSlotLimit = 3,
   importChunkSize = 120,
   dbName = "petriaeqinv",
@@ -1547,6 +1552,39 @@ function eqInv.groupResultsByWear(results)
   return groups
 end
 
+
+function eqInv.cleanCellText(s)
+  s = eqInv.safeString(s)
+  s = s:gsub("\r", " "):gsub("\n", " ")
+  s = s:gsub("%s+", " ")
+  return eqInv.trim(s)
+end
+
+function eqInv.formatItemCompactLines(item)
+  local nivel = tostring(item.nivel or 0)
+  local peso = tostring(item.peso or 0)
+  local pts = tostring(eqInv.scoreItem(item, eqInv.config.recommendMode))
+  local tipo = eqInv.cleanCellText(item.tipo or "")
+  local nombre = eqInv.cleanCellText(item.nombre or "?")
+  local afecta = eqInv.cleanCellText(item.afectaciones_text or "")
+  local lugar = eqInv.cleanCellText(eqInv.formatLugar(item))
+
+  if afecta == "" then afecta = "-" end
+
+  local line1 = "[" .. nivel .. " | peso " .. peso .. " | pts " .. pts .. " | " .. tipo .. "] " .. nombre
+  local line2 = "  afecta: " .. afecta
+  local line3 = "  lugar : " .. lugar
+
+  return eqInv.shorten(line1, 108), eqInv.shorten(line2, 108), eqInv.shorten(line3, 108)
+end
+
+function eqInv.printCompactItem(item)
+  local l1, l2, l3 = eqInv.formatItemCompactLines(item)
+  eqInv.out(l1, eqInv.colorByLevel(item.nivel))
+  echo(l2 .. "\n")
+  echo(l3 .. "\n")
+end
+
 function eqInv.formatItemTableRow(item)
   local c = eqInv.config.tableColumns
   local nivel = eqInv.padLeft(tostring(item.nivel or 0), c.nivel)
@@ -1582,19 +1620,37 @@ function eqInv.printFlatTable(results, max)
 end
 
 function eqInv.printGroupedTable(results, limit)
-  local printed = 0
   local groups = eqInv.groupResultsByWear(results)
+  local groupCount = 0
+  local printed = 0
+  local broadSearch = #groups > 1
+
+  local perGroupLimit = limit
+  if broadSearch then
+    perGroupLimit = eqInv.config.groupedItemLimit or 3
+  end
 
   for _, group in ipairs(groups) do
-    if printed >= limit then break end
-    cecho("\n<white>== " .. group.label .. " ==<reset> <grey>(" .. tostring(#group.items) .. ")<reset>\n")
-    eqInv.printTableHeader()
+    if broadSearch and groupCount >= (eqInv.config.groupLimit or 25) then break end
+    groupCount = groupCount + 1
 
-    for _, item in ipairs(group.items) do
-      if printed >= limit then break end
+    cecho("\n<white>== " .. group.label .. " ==<reset> <grey>(" .. tostring(#group.items) .. ")<reset>\n")
+
+    local maxItems = math.min(perGroupLimit, #group.items)
+    for i = 1, maxItems do
       printed = printed + 1
-      eqInv.out(eqInv.formatItemTableRow(item), eqInv.colorByLevel(item.nivel))
+      eqInv.printCompactItem(group.items[i])
     end
+
+    if #group.items > maxItems then
+      eqInv.warn("Grupo " .. group.label .. ": mostrando " .. tostring(maxItems) .. " de " .. tostring(#group.items) .. ". Filtra por slot para ver mas: eqsearch 14 " .. group.label)
+    end
+  end
+
+  if broadSearch then
+    cecho("<grey>Resumen:<reset> " .. tostring(#results) .. " items en " .. tostring(#groups) .. " grupo(s). Mostrando hasta " .. tostring(perGroupLimit) .. " por grupo.\n")
+  else
+    cecho("<grey>Resumen:<reset> " .. tostring(printed) .. " item(s) mostrado(s).\n")
   end
 end
 
@@ -1613,14 +1669,16 @@ function eqInv.printResults(results, title, limit)
 
   if eqInv.config.outputMode == "paragraph" then
     for i = 1, max do eqInv.out(eqInv.formatItem(results[i]), eqInv.colorByLevel(results[i].nivel)) end
+    if #results > max then
+      eqInv.warn("Mostrando " .. tostring(max) .. " de " .. tostring(#results) .. ". Usa una busqueda mas especifica.")
+    end
   elseif eqInv.config.outputMode == "table" then
     eqInv.printFlatTable(results, max)
+    if #results > max then
+      eqInv.warn("Mostrando " .. tostring(max) .. " de " .. tostring(#results) .. ". Usa una busqueda mas especifica.")
+    end
   else
-    eqInv.printGroupedTable(results, max)
-  end
-
-  if #results > max then
-    eqInv.warn("Mostrando " .. tostring(max) .. " de " .. tostring(#results) .. ". Usa una busqueda mas especifica.")
+    eqInv.printGroupedTable(results, limit)
   end
 end
 
@@ -1637,10 +1695,38 @@ function eqInv.searchText(q)
   eqInv.printResults(results, "Busqueda: " .. q)
 end
 
+function eqInv.parseSearchLevelArg(input)
+  -- Para busquedas normales:
+  --   eqsearch 14        => solo nivel 14
+  --   eqsearch 14 luz    => solo nivel 14 y filtro luz
+  --   eqsearch 10-14     => rango 10 a 14
+  -- Para eqfaltante se sigue usando parseLevelArg(), porque ahí conviene <= nivel.
+  input = eqInv.trim(input or "")
+  local a, b, rest = input:match("^(%d+)%s*%-%s*(%d+)%s*(.*)$")
+  if a and b then
+    a, b = tonumber(a), tonumber(b)
+    if a > b then a, b = b, a end
+    return a, b, eqInv.trim(rest)
+  end
+
+  local n, rest2 = input:match("^(%d+)%s*(.*)$")
+  if n then
+    n = tonumber(n)
+    return n, n, eqInv.trim(rest2)
+  end
+
+  return nil, nil, input
+end
+
 function eqInv.searchRange(minLevel, maxLevel, filter)
   if not eqInv.ensureReady() then return end
   local results = eqInv.findItems({ minLevel = minLevel, maxLevel = maxLevel, wear = filter })
-  local title = "Nivel " .. tostring(minLevel) .. "-" .. tostring(maxLevel)
+  local title
+  if tonumber(minLevel) == tonumber(maxLevel) then
+    title = "Nivel " .. tostring(maxLevel)
+  else
+    title = "Nivel " .. tostring(minLevel) .. "-" .. tostring(maxLevel)
+  end
   if filter and filter ~= "" then title = title .. " / " .. filter end
   eqInv.printResults(results, title)
 end
@@ -1697,7 +1783,9 @@ function eqInv.help()
   cecho("<cyan>EQSearch Petria - ayuda<reset>\n")
   echo("eqsync [url]                    Descarga, borra DB anterior e indexa el JSON.\n")
   echo("eqsearch varita                 Busca por nombre o descripcion.\n")
-  echo("eqsearch 10-14                  Items nivel 10 al 14, agrupados por Vestir y nivel descendente.\n")
+  echo("eqsearch 14                     Items exactamente de nivel 14.\n")
+  echo("eqsearch 10-14                  Items nivel 10 al 14, agrupados por Vestir; muestra pocos por grupo.\n")
+  echo("eqsearch 14 luz                 Items exactamente nivel 14 compatibles con luz.\n")
   echo("eqsearch 10-14 escudo           Items nivel 10 al 14 que se visten como escudo/rodela/escudo.\n")
   echo("eqsearch set                    Lista todos los sets indexados.\n")
   echo("eqsearch set dragon             Busca items cuyo Set contenga 'dragon'.\n")
@@ -1849,7 +1937,7 @@ function eqInv.alias(input)
     return
   end
 
-  local minLevel, maxLevel, filter = eqInv.parseLevelArg(input)
+  local minLevel, maxLevel, filter = eqInv.parseSearchLevelArg(input)
   if minLevel ~= nil and maxLevel ~= nil then eqInv.searchRange(minLevel, maxLevel, filter); return end
 
   eqInv.searchText(input)
