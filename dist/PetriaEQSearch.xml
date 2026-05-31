@@ -15,7 +15,7 @@
         <name>PetriaEQSearch Core</name>
         <packageName>PetriaEQSearch</packageName>
         <script>-- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev17-module
+-- Version: 2026.05.30-rev18-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -52,7 +52,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev17-module"
+eqInv.version = "2026.05.30-rev18-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -1048,6 +1048,31 @@ function eqInv.findItems(opts)
   return results
 end
 
+function eqInv.itemDuplicateSignature(item)
+  -- Firma visual para evitar sugerencias repetidas.
+  -- No usa VNUM porque el objetivo es colapsar clones visualmente identicos.
+  return table.concat({
+    eqInv.norm(item.nombre or ""),
+    eqInv.norm(item.tipo or ""),
+    tostring(item.nivel or 0),
+    tostring(item.peso or 0),
+    eqInv.norm(item.afectaciones_text or ""),
+    eqInv.norm(eqInv.formatLugar(item))
+  }, "|")
+end
+
+function eqInv.dedupeSuggestionList(results)
+  local seen, out = {}, {}
+  for _, item in ipairs(results or {}) do
+    local sig = eqInv.itemDuplicateSignature(item)
+    if not seen[sig] then
+      seen[sig] = true
+      table.insert(out, item)
+    end
+  end
+  return out, #results - #out
+end
+
 function eqInv.findTopSuggestionsForSlot(slot, maxLevel, limit)
   limit = limit or eqInv.config.missingSlotLimit or 3
   maxLevel = tonumber(maxLevel)
@@ -1056,9 +1081,13 @@ function eqInv.findTopSuggestionsForSlot(slot, maxLevel, limit)
   -- Si no hay del nivel actual, aparecen automaticamente niveles inferiores.
   local results = eqInv.findItems({ minLevel = 0, maxLevel = maxLevel, wear = slot })
   eqInv.sortByRecommendation(results, eqInv.config.recommendMode)
+
+  local deduped, duplicatesRemoved = eqInv.dedupeSuggestionList(results)
+
   local out = {}
-  for i = 1, math.min(limit, #results) do table.insert(out, results[i]) end
-  return out, #results
+  for i = 1, math.min(limit, #deduped) do table.insert(out, deduped[i]) end
+
+  return out, #deduped, duplicatesRemoved
 end
 
 function eqInv.formatItem(item)
@@ -1645,8 +1674,9 @@ function eqInv.itemHeaderParts(item)
   local peso = tostring(item.peso or 0)
   local pts = tostring(eqInv.scoreItem(item, eqInv.config.recommendMode))
   local tipo = eqInv.cleanCellText(item.tipo or "")
+  local vnum = tostring(item.vnum or "?")
 
-  return "Nivel " .. nivel .. " | Peso " .. peso .. " | Pts " .. pts .. " | Tipo " .. tipo
+  return "VNUM " .. vnum .. " | Nivel " .. nivel .. " | Peso " .. peso .. " | Pts " .. pts .. " | Tipo " .. tipo
 end
 
 function eqInv.printPrettyItemBox(item)
@@ -1887,6 +1917,7 @@ function eqInv.help()
   echo("eqsearch 10-14 escudo           Items nivel 10 al 14 que se visten como escudo/rodela/escudo.\n")
   echo("eqsearch set                    Lista todos los sets indexados.\n")
   echo("eqsearch set dragon             Busca items cuyo Set contenga 'dragon'.\n")
+  echo("eqvnum 1100                     Muestra un item especifico por VNUM.\n")
   echo("eqsearch tipos                  Lista tipos indexados.\n")
   echo("eqsearch vestir                 Lista valores Vestir indexados y alias de slots.\n")
   echo("eqsearch flags                  Lista flags indexados.\n")
@@ -1999,14 +2030,35 @@ function eqInv.finishMissingCapture()
   cecho("&lt;cyan&gt;Slots faltantes detectados&lt;reset&gt; (" .. rangeTxt .. "): " .. table.concat(slots, ", ") .. "\n")
 
   for _, slot in ipairs(slots) do
-    local suggestions, total = eqInv.findTopSuggestionsForSlot(slot, st.maxLevel, eqInv.config.missingSlotLimit)
+    local suggestions, total, duplicatesRemoved = eqInv.findTopSuggestionsForSlot(slot, st.maxLevel, eqInv.config.missingSlotLimit)
     local title = "Slot: " .. slot
     if st.maxLevel then title = title .. " | 3 sugerencias &lt;= nivel " .. tostring(st.maxLevel) end
     eqInv.printResults(suggestions, title, eqInv.config.missingSlotLimit)
     if total and total &gt; #suggestions then
-      eqInv.warn("Hay " .. tostring(total) .. " candidato(s) para " .. slot .. "; mostrando las mejores " .. tostring(#suggestions) .. ".")
+      eqInv.warn("Hay " .. tostring(total) .. " candidato(s) unicos para " .. slot .. "; mostrando las mejores " .. tostring(#suggestions) .. ".")
+    end
+    if duplicatesRemoved and duplicatesRemoved &gt; 0 then
+      eqInv.warn("Se omitieron " .. tostring(duplicatesRemoved) .. " duplicado(s) visuales para " .. slot .. ".")
     end
   end
+end
+
+
+function eqInv.searchVnum(vnum)
+  if not eqInv.ensureReady() then return end
+  vnum = tonumber(vnum)
+  if not vnum then
+    eqInv.warn("Uso: eqvnum 1100")
+    return
+  end
+
+  local item = eqInv.cache.byVnum[vnum]
+  if not item then
+    eqInv.warn("No encontre item con VNUM " .. tostring(vnum))
+    return
+  end
+
+  eqInv.printResults({ item }, "VNUM " .. tostring(vnum), 1)
 end
 
 -- ------------------------------------------------------------
@@ -2061,6 +2113,7 @@ function eqInv.installAliases()
   eqInv.aliasIds.format = tempAlias([[^eqformat\s+(grouped|group|grupo|agrupado|table|tabla|paragraph|paragraphs|parrafo)\s*$]], function() eqInv.setOutputMode(matches[2]) end)
   eqInv.aliasIds.mode = tempAlias([[^eqmodo\s+(subir|level|levelear|xp|exp|pk|pvp|defensa|tanque|tank|caster|mago|hechicero|spell|spells|sp|healer|heal|curar|sanar|hsp|danio|dano|daño|damage|balance|balanced)\s*$]], function() eqInv.setRecommendMode(matches[2]) end)
   eqInv.aliasIds.power = tempAlias([[^eqpower(?:\s+(\d+))?$]], function() eqInv.showPowerInfo(matches[2] or "") end)
+  eqInv.aliasIds.vnum = tempAlias([[^eqvnum\s+(\d+)\s*$]], function() eqInv.searchVnum(matches[2]) end)
 end
 
 function eqInv.init()
