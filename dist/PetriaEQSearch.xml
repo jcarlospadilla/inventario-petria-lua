@@ -15,7 +15,7 @@
         <name>PetriaEQSearch Core</name>
         <packageName>PetriaEQSearch</packageName>
         <script>-- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev23-module
+-- Version: 2026.05.30-rev24-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -26,25 +26,26 @@
 --
 -- Comandos:
 --   eqsync [url]
---   eqsearch help
---   eqsearch varita
---   eqsearch 14
---   eqsearch 14 luz
---   eqsearch luz 14
---   eqsearch luz
---   eqsearch 10-14
---   eqsearch 10-14 escudo
---   eqsearch set dragon
---   eqsearch tipos
---   eqsearch vestir
---   eqsearch flags
---   eqsearch formato grouped|table|paragraph
---   eqsearch modo subir|pk|defensa|caster|healer|danio|balance
+--   eqlista help
+--   eqlista 14
+--   eqlista 14 luz
+--   eqlista luz 14
+--   eqlista 10-14
+--   eqlista 10-14 escudo
+--   eqlista set dragon
+--   eqlista tipos|vestir|flags|sets
+--   eqlista formato grouped|table|paragraph
+--   eqlista modo subir|pk|defensa|caster|healer|danio|balance
+--   eqbusca varita
+--   eqbusca arco corto + 14
+--   eqbusca arco corto + 10-14
+--   eqsearch varita        -- alias de eqbusca
 --   eqmodo subir|pk|defensa|caster|healer|danio|balance
+--   eqorden nivel|pts|nombre
 --   eqpower [nivel]
 --   eqformat grouped|table|paragraph
---   eqsearch faltantes 14
---   eqfaltantes 14
+--   eqfaltante [nivel]
+--   eqfaltantes [nivel]
 --   eqlevel 14
 --
 -- Notas:
@@ -54,7 +55,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev23-module"
+eqInv.version = "2026.05.30-rev24-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -1934,21 +1935,69 @@ function eqInv.printResults(results, title, limit)
   end
 end
 
+function eqInv.parseTextSearchLevel(q)
+  -- Sintaxis literal con filtro opcional:
+  --   eqbusca texto a buscar + 14
+  --   eqbusca texto a buscar + 10-14
+  --
+  -- Todo lo que queda antes del ultimo "+" se toma como texto literal.
+  q = eqInv.trim(q or "")
+
+  local text, a, b = q:match("^(.*)%s*%+%s*(%d+)%s*%-%s*(%d+)%s*$")
+  if text and a and b then
+    text = eqInv.trim(text)
+    if text ~= "" then
+      a, b = tonumber(a), tonumber(b)
+      if a &gt; b then a, b = b, a end
+      return text, a, b, true
+    end
+  end
+
+  local text2, n = q:match("^(.*)%s*%+%s*(%d+)%s*$")
+  if text2 and n then
+    text2 = eqInv.trim(text2)
+    if text2 ~= "" then
+      n = tonumber(n)
+      return text2, n, n, true
+    end
+  end
+
+  return q, nil, nil, false
+end
+
 function eqInv.searchText(q)
   if not eqInv.ensureReady() then return end
   q = eqInv.trim(q or "")
   if q == "" then
     eqInv.warn("Uso: eqbusca &lt;nombre o descripcion&gt;  |  eqsearch &lt;nombre o descripcion&gt;")
+    eqInv.warn("Filtro opcional: eqbusca &lt;texto&gt; + 14  |  eqbusca &lt;texto&gt; + 10-14")
     eqInv.warn("Para filtros por nivel/slot/set usa: eqlista")
     return
   end
 
+  local searchText, minLevel, maxLevel, hasLevelFilter = eqInv.parseTextSearchLevel(q)
+
   local results = {}
   for _, item in ipairs(eqInv.cache.items) do
-    if eqInv.containsText((item.nombre or "") .. " " .. (item.desc_corta or ""), q) then table.insert(results, item) end
+    local ok = eqInv.containsText((item.nombre or "") .. " " .. (item.desc_corta or ""), searchText)
+    if ok and hasLevelFilter then
+      ok = eqInv.itemInLevelRange(item, minLevel, maxLevel)
+    end
+    if ok then table.insert(results, item) end
   end
+
   eqInv.sortDisplayResults(results)
-  eqInv.printResults(results, "Busca nombre/descripcion: " .. q)
+
+  local title = "Busca nombre/descripcion: " .. searchText
+  if hasLevelFilter then
+    if tonumber(minLevel) == tonumber(maxLevel) then
+      title = title .. " + nivel " .. tostring(maxLevel)
+    else
+      title = title .. " + nivel " .. tostring(minLevel) .. "-" .. tostring(maxLevel)
+    end
+  end
+
+  eqInv.printResults(results, title)
 end
 
 function eqInv.textAlias(input)
@@ -2098,6 +2147,7 @@ function eqInv.help()
   echo("eqbusca varita                  Busca 'varita' en nombre o descripcion.\n")
   echo("eqsearch varita                 Alias de eqbusca.\n")
   echo("eqbusca luz 14                  Busca literalmente 'luz' y '14' en nombre/descripcion.\n")
+  echo("eqbusca luz + 14                Busca 'luz' y filtra items exactamente nivel 14.\n")
   echo("\n")
   echo("LISTADO ESTRUCTURADO POR NIVEL/SLOT/SET:\n")
   echo("eqlista 14                      Items exactamente de nivel 14.\n")
