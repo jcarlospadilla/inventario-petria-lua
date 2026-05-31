@@ -1,5 +1,5 @@
 -- Petria EQSearch para Mudlet
--- Version: 2026.05.30-rev24-module
+-- Version: 2026.05.30-rev25-module
 --
 -- Que hace:
 --   - Descarga inventarionew.json desde una URL configurable.
@@ -39,7 +39,7 @@
 
 _eqInv = _eqInv or {}
 eqInv = _eqInv
-eqInv.version = "2026.05.30-rev24-module"
+eqInv.version = "2026.05.30-rev25-module"
 
 -- ------------------------------------------------------------
 -- Limpieza defensiva para evitar duplicados al recargar el script.
@@ -1780,12 +1780,123 @@ function eqInv.itemHeaderParts(item)
   return "VNUM " .. vnum .. " | Nivel " .. nivel .. " | Peso " .. peso .. " | Pts " .. pts .. " | Tipo " .. tipo
 end
 
+function eqInv.rawItemTable(item)
+  if type(item) ~= "table" then return {} end
+  if type(item._raw_table) == "table" then return item._raw_table end
+
+  local raw = item.raw_json or ""
+  if raw ~= "" and yajl and yajl.to_value then
+    local ok, decoded = pcall(yajl.to_value, raw)
+    if ok and type(decoded) == "table" then
+      item._raw_table = decoded
+      return decoded
+    end
+  end
+
+  return {}
+end
+
+function eqInv.formatArmorProtections(prot)
+  if type(prot) ~= "table" then return "" end
+  local out = {}
+  local order = {
+    { "Pierce", "Pierce" },
+    { "Blunt", "Blunt" },
+    { "Slash", "Slash" },
+    { "Magic", "Magic" }
+  }
+
+  for _, pair in ipairs(order) do
+    local key, label = pair[1], pair[2]
+    local v = prot[key] or prot[key:lower()]
+    if v ~= nil then table.insert(out, label .. " " .. tostring(v)) end
+  end
+
+  return table.concat(out, ", ")
+end
+
+function eqInv.formatExtraDataDetails(extra)
+  if type(extra) ~= "table" then return "" end
+
+  local out = {}
+
+  local weaponType = extra["Weapon Type"] or extra.weaponType or extra.weapon_type
+  local weaponFlags = extra["Weapon Flags"] or extra.weaponFlags or extra.weapon_flags
+  local cargas = extra["Cargas"] or extra.cargas or extra.charges
+  local spell = extra["Spell"] or extra.spell
+
+  if weaponType ~= nil then table.insert(out, "Weapon Type: " .. eqInv.safeString(weaponType)) end
+  if weaponFlags ~= nil then table.insert(out, "Weapon Flags: " .. eqInv.safeString(weaponFlags)) end
+  if cargas ~= nil then table.insert(out, "Cargas: " .. eqInv.safeString(cargas)) end
+  if spell ~= nil then table.insert(out, "Spell: " .. eqInv.safeString(spell)) end
+
+  local known = {
+    ["Weapon Type"] = true,
+    ["Weapon Flags"] = true,
+    ["Cargas"] = true,
+    ["Spell"] = true,
+    weaponType = true,
+    weaponFlags = true,
+    weapon_type = true,
+    weapon_flags = true,
+    cargas = true,
+    charges = true,
+    spell = true
+  }
+
+  for k, v in pairs(extra) do
+    if not known[k] then
+      table.insert(out, tostring(k) .. ": " .. eqInv.safeString(v))
+    end
+  end
+
+  return table.concat(out, " | ")
+end
+
+function eqInv.formatItemDetails(item)
+  local raw = eqInv.rawItemTable(item)
+  local out = {}
+
+  local damageDice = raw.Damage_Dice or raw.damage_dice or item.damage_dice
+  local damageAvg = raw.Damage_Avg or raw.damage_avg or item.damage_avg
+
+  if eqInv.hasValue(damageDice) and eqInv.norm(damageDice) ~= "null" then
+    table.insert(out, "Daño: " .. eqInv.safeString(damageDice))
+  end
+
+  if damageAvg ~= nil and eqInv.safeString(damageAvg) ~= "" and eqInv.norm(damageAvg) ~= "null" then
+    table.insert(out, "Avg: " .. eqInv.safeString(damageAvg))
+  end
+
+  local armor = raw.Armor_Protections or raw.armor_protections
+  local armorText = eqInv.formatArmorProtections(armor)
+  if armorText ~= "" then
+    table.insert(out, "Protecciones: " .. armorText)
+  end
+
+  local spells = raw.Spells or raw.spells
+  local spellsText = eqInv.formatSpells(spells)
+  if eqInv.hasValue(spellsText) then
+    table.insert(out, "Spells: " .. spellsText)
+  end
+
+  local extra = raw.Extra_Data or raw.extra_data
+  if type(extra) == "table" then
+    local extraText = eqInv.formatExtraDataDetails(extra)
+    if extraText ~= "" then table.insert(out, extraText) end
+  end
+
+  return table.concat(out, " | ")
+end
+
 function eqInv.printPrettyItemBox(item)
   local nombre = eqInv.cleanCellText(item.nombre or "?")
   local afecta = eqInv.cleanCellText(item.afectaciones_text or "")
+  local detalles = eqInv.cleanCellText(eqInv.formatItemDetails(item))
   local lugar = eqInv.cleanCellText(eqInv.formatLugar(item))
 
   if afecta == "" then afecta = "-" end
+  if detalles == "" then detalles = nil end
   if lugar == "" then lugar = "-" end
 
   -- No imprime borde superior/inferior aquí.
@@ -1795,6 +1906,7 @@ function eqInv.printPrettyItemBox(item)
   eqInv.out(eqInv.boxTextLine(eqInv.itemHeaderParts(item)), eqInv.colorByLevel(item.nivel))
   eqInv.printBoxWrapped("Nombre", nombre)
   eqInv.printBoxWrapped("Afecta", afecta)
+  if detalles then eqInv.printBoxWrapped("Detalle", detalles) end
   eqInv.printBoxWrapped("Lugar ", lugar)
 end
 
@@ -1803,11 +1915,14 @@ function eqInv.formatItemCompactLines(item)
   local header = eqInv.itemHeaderParts(item)
   local nombre = "Nombre: " .. eqInv.cleanCellText(item.nombre or "?")
   local afecta = "Afecta: " .. eqInv.cleanCellText(item.afectaciones_text or "-")
+  local detalles = eqInv.cleanCellText(eqInv.formatItemDetails(item))
   local lugar = "Lugar : " .. eqInv.cleanCellText(eqInv.formatLugar(item))
+  local third = afecta
+  if detalles ~= "" then third = third .. " | Detalle: " .. detalles end
 
   return eqInv.shorten(header, eqInv.boxContentWidth()),
          eqInv.shorten(nombre, eqInv.boxContentWidth()),
-         eqInv.shorten(afecta .. " | " .. lugar, eqInv.boxContentWidth())
+         eqInv.shorten(third .. " | " .. lugar, eqInv.boxContentWidth())
 end
 
 function eqInv.printCompactItem(item)
@@ -2161,6 +2276,7 @@ function eqInv.help()
   echo("eqmodo subir|pk|defensa|caster  Atajo para cambiar modo de recomendacion.\n")
   echo("eqorden nivel|pts|nombre        Cambia orden visual de eqbusca/eqlista.\n")
   echo("Los codigos de color de Petria como {R, {G, {Y y {x se renderizan en la salida.\n")
+  echo("Armas muestran daño, promedio, flags/tipo de arma; armaduras muestran protecciones.\n")
   echo("eqfaltante                      Usa nivel GMCP, ignora emblema y muestra 3 sugerencias por slot.\n")
   echo("eqfaltantes                     Igual que eqfaltante.\n")
   echo("eqfaltante 14                   Override manual: busca sugerencias <= nivel 14.\n")
